@@ -7,7 +7,7 @@ All requests require the header:
 x-workspace-id: {CARABASE_WORKSPACE_ID}
 ```
 
-All request/response bodies are `application/json`.
+All request/response bodies are `application/json` unless otherwise noted.
 
 ---
 
@@ -27,25 +27,75 @@ Returns HTTP 200 if the server is running and the workspace is valid.
 
 Tasks are extracted from daily note document trees at query time. They are `taskItem` nodes within `taskList` blocks, typically inside `logCard` wrappers.
 
+### Create Task
+
+```
+POST /api/v1/tasks
+```
+
+**Request Body:**
+```json
+{
+  "text": "Review PR #42",
+  "folio": "Backend",
+  "tags": ["review"],
+  "date": "2026-03-30"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `text` | string | Yes | — | Task description |
+| `folio` | string | No | — | Folio name to associate |
+| `tags` | string[] | No | — | Tags for the task entry |
+| `date` | string | No | today | Target date (YYYY-MM-DD) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "task": {
+    "text": "Review PR #42",
+    "date": "2026-03-30",
+    "folio": "Backend",
+    "tags": ["review"],
+    "timestamp": "02:15 PM"
+  }
+}
+```
+
+The server constructs the proper TipTap block structure (`logCard` > `taskList` > `taskItem`) and injects it into the specified date's daily note.
+
 ### List Tasks
 
 ```
 GET /api/v1/tasks
+GET /api/v1/tasks?checked=false&folio=Backend&date_from=2026-03-24&date_to=2026-03-30&tag=review&limit=20
 ```
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `checked` | boolean | — | Filter by completion status |
+| `folio` | string | — | Filter by folio name |
+| `tag` | string | — | Filter by tag |
+| `date_from` | string | — | Start date (YYYY-MM-DD) |
+| `date_to` | string | — | End date (YYYY-MM-DD) |
+| `limit` | number | 50 | Maximum number of results |
 
 **Response:**
 ```json
 {
   "tasks": [
     {
-      "id": "string",
-      "text": "string",
+      "id": "2026-03-30:3",
+      "text": "Review PR #42",
       "checked": false,
-      "date": "YYYY-MM-DD",
-      "folios": ["string"],
-      "tags": ["string"],
-      "timestamp": "hh:mm AM/PM",
-      "nodeIndex": 0
+      "date": "2026-03-30",
+      "folios": ["Backend"],
+      "tags": ["review"],
+      "timestamp": "02:15 PM",
+      "nodeIndex": 3
     }
   ]
 }
@@ -53,7 +103,7 @@ GET /api/v1/tasks
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | Unique task identifier |
+| `id` | string | Composite task identifier (`YYYY-MM-DD:nodeIndex`) |
 | `text` | string | Task description text |
 | `checked` | boolean | Whether the task is completed |
 | `date` | string | Date of the daily note containing this task (YYYY-MM-DD) |
@@ -71,8 +121,8 @@ PATCH /api/v1/tasks
 **Request Body:**
 ```json
 {
-  "date": "YYYY-MM-DD",
-  "nodeIndex": 0,
+  "date": "2026-03-30",
+  "nodeIndex": 3,
   "checked": true
 }
 ```
@@ -82,6 +132,19 @@ PATCH /api/v1/tasks
 | `date` | string | Yes | Date of the daily note containing the task |
 | `nodeIndex` | number | Yes | Node index from the list tasks response |
 | `checked` | boolean | Yes | New completion state |
+
+**Response:**
+```json
+{
+  "success": true,
+  "task": {
+    "text": "Review PR #42",
+    "checked": true,
+    "date": "2026-03-30",
+    "nodeIndex": 3
+  }
+}
+```
 
 ---
 
@@ -119,6 +182,32 @@ Auto-creates the note if it doesn't exist.
 | `documentState` | array | Array of TipTap/ProseMirror block nodes |
 | `updatedAt` | string | Last modification timestamp (ISO 8601) |
 
+### Get Daily Note as Text
+
+```
+GET /api/v1/daily-notes/:date/text
+```
+
+**Parameters:**
+| Parameter | Location | Type | Description |
+|---|---|---|---|
+| `date` | path | string | Date in YYYY-MM-DD format |
+
+Returns the daily note rendered as human-readable text instead of raw TipTap JSON.
+
+**Response:**
+```json
+{
+  "date": "2026-03-30",
+  "text": "## 09:15 AM [#standup] [Backend]\nDiscussed deploy timeline. Targeting Friday for v2.3.1 release.\n\n## 11:30 AM [#review] [Backend]\n- [ ] Review PR #42\n- [x] Update API docs"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string | Note date |
+| `text` | string | Rendered markdown-style text of the daily note |
+
 ### Update Daily Note
 
 ```
@@ -143,6 +232,51 @@ PATCH /api/v1/daily-notes/:date
 
 **Warning**: This replaces the full document. Always GET the current state first, modify it, then PATCH back.
 
+### Inject Block into Daily Note
+
+```
+POST /api/v1/daily-notes/inject
+```
+
+Append a block to today's daily note without needing to GET/modify/PATCH the full document.
+
+**Request Body:**
+```json
+{
+  "block": {
+    "type": "logCard",
+    "attrs": {
+      "timestamp": "03:45 PM",
+      "visibility": "PRIVATE",
+      "tags": "[\"deploy\"]",
+      "folios": "[\"Backend\"]",
+      "customers": "[]",
+      "abandoned": "false"
+    },
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          { "type": "text", "text": "Deployed v2.3.1 to production." }
+        ]
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `block` | object | Yes | A TipTap/ProseMirror block node to append |
+
+**Response:**
+```json
+{
+  "success": true,
+  "date": "2026-03-30"
+}
+```
+
 ---
 
 ## Folios
@@ -161,8 +295,8 @@ GET /api/v1/folios
   "folios": [
     {
       "id": "uuid",
-      "name": "string",
-      "about": "string",
+      "name": "Backend",
+      "about": "Backend services powering the core API.",
       "createdAt": "ISO-8601",
       "updatedAt": "ISO-8601"
     }
@@ -179,8 +313,8 @@ POST /api/v1/folios
 **Request Body:**
 ```json
 {
-  "name": "string",
-  "about": "string"
+  "name": "New Project",
+  "about": "Description of the project"
 }
 ```
 
@@ -188,6 +322,19 @@ POST /api/v1/folios
 |---|---|---|---|
 | `name` | string | Yes | Folio display name |
 | `about` | string | No | Description / about text |
+
+**Response:**
+```json
+{
+  "folio": {
+    "id": "uuid",
+    "name": "New Project",
+    "about": "Description of the project",
+    "createdAt": "ISO-8601",
+    "updatedAt": "ISO-8601"
+  }
+}
+```
 
 ### Get Folio Detail
 
@@ -205,8 +352,8 @@ GET /api/v1/folios/:folioId
 {
   "folio": {
     "id": "uuid",
-    "name": "string",
-    "about": "string",
+    "name": "Backend",
+    "about": "Backend services powering the core API.",
     "timeline": [],
     "commits": [],
     "createdAt": "ISO-8601",
@@ -224,8 +371,8 @@ PATCH /api/v1/folios/:folioId
 **Request Body:**
 ```json
 {
-  "name": "string",
-  "about": "string"
+  "name": "Updated Name",
+  "about": "Updated description"
 }
 ```
 
@@ -247,8 +394,8 @@ GET /api/v1/entities
   "entities": [
     {
       "id": "uuid",
-      "name": "string",
-      "type": "string",
+      "name": "Acme Project",
+      "type": "project",
       "metadata": {}
     }
   ]
@@ -259,7 +406,7 @@ GET /api/v1/entities
 |---|---|---|
 | `id` | string | Entity UUID |
 | `name` | string | Entity display name |
-| `type` | string | Entity type (e.g., "person", "project", "concept", "tool") |
+| `type` | string | Entity type (`person`, `project`, `concept`, `organization`, `tool`, `topic`) |
 | `metadata` | object | Additional entity metadata |
 
 ### Get Entity Detail
@@ -268,21 +415,26 @@ GET /api/v1/entities
 GET /api/v1/entities/:entityId
 ```
 
+**Parameters:**
+| Parameter | Location | Type | Description |
+|---|---|---|---|
+| `entityId` | path | string | Entity UUID |
+
 **Response:**
 ```json
 {
   "entity": {
     "id": "uuid",
-    "name": "string",
-    "type": "string",
+    "name": "Acme Project",
+    "type": "project",
     "metadata": {},
     "edges": [
       {
         "id": "uuid",
         "sourceId": "uuid",
         "targetId": "uuid",
-        "type": "string",
-        "targetName": "string"
+        "type": "involves",
+        "targetName": "Alice Chen"
       }
     ]
   }
@@ -303,7 +455,7 @@ GET /api/v1/edges
       "id": "uuid",
       "sourceId": "uuid",
       "targetId": "uuid",
-      "type": "string"
+      "type": "involves"
     }
   ]
 }
@@ -325,7 +477,7 @@ GET /api/v1/memories
   "memories": [
     {
       "id": "uuid",
-      "content": "string",
+      "content": "The team decided to use PostgreSQL for the analytics pipeline.",
       "createdAt": "ISO-8601"
     }
   ]
@@ -341,13 +493,24 @@ POST /api/v1/memories
 **Request Body:**
 ```json
 {
-  "content": "string"
+  "content": "The memory text here."
 }
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `content` | string | Yes | The memory text |
+
+**Response:**
+```json
+{
+  "memory": {
+    "id": "uuid",
+    "content": "The memory text here.",
+    "createdAt": "ISO-8601"
+  }
+}
+```
 
 ---
 
@@ -359,14 +522,19 @@ POST /api/v1/memories
 GET /api/v1/artifacts/:id
 ```
 
+**Parameters:**
+| Parameter | Location | Type | Description |
+|---|---|---|---|
+| `id` | path | string | Artifact UUID |
+
 **Response:**
 ```json
 {
   "artifact": {
     "id": "uuid",
-    "filename": "string",
-    "mimeType": "string",
-    "size": 0,
+    "filename": "report.pdf",
+    "mimeType": "application/pdf",
+    "size": 245000,
     "createdAt": "ISO-8601"
   }
 }
@@ -380,6 +548,13 @@ GET /api/v1/artifacts/:id/content
 
 Returns the extracted text content of the artifact as a string.
 
+**Response:**
+```json
+{
+  "content": "Extracted text content of the document..."
+}
+```
+
 ### Upload Artifact
 
 ```
@@ -389,6 +564,19 @@ Content-Type: multipart/form-data
 
 Send the file as a multipart form upload.
 
+**Response:**
+```json
+{
+  "artifact": {
+    "id": "uuid",
+    "filename": "report.pdf",
+    "mimeType": "application/pdf",
+    "size": 245000,
+    "createdAt": "ISO-8601"
+  }
+}
+```
+
 ---
 
 ## Block Format Reference
@@ -396,7 +584,8 @@ Send the file as a multipart form upload.
 Daily note documents use TipTap/ProseMirror JSON format. Key node types:
 
 ### logCard
-Top-level wrapper for timestamped entries.
+Top-level wrapper for timestamped entries. All `attrs` values are **strings**, including JSON arrays.
+
 ```json
 {
   "type": "logCard",
@@ -411,7 +600,15 @@ Top-level wrapper for timestamped entries.
   "content": [ ...child blocks... ]
 }
 ```
-Note: All `attrs` values are strings, including JSON arrays.
+
+| Attr | Format | Description |
+|---|---|---|
+| `timestamp` | `"hh:mm AM/PM"` | Entry time |
+| `visibility` | `"PRIVATE"` or `"PUBLIC"` | Visibility scope |
+| `tags` | JSON string array | Tags |
+| `folios` | JSON string array | Associated folios |
+| `customers` | JSON string array | Customer references |
+| `abandoned` | `"true"` or `"false"` | Whether abandoned |
 
 ### paragraph
 ```json

@@ -1,8 +1,8 @@
 ---
 name: carabase-core
-description: Set up and verify connection to a Carabase instance. Health checks, MCP server configuration, and references to task, knowledge, and daily note skills.
+description: Set up and verify connection to a Carabase instance. Health checks, MCP server configuration, complete tool inventory, and references to task, knowledge, and daily note skills.
 metadata:
-  version: "1.0.0"
+  version: "2.0.0"
   requires_env:
     - CARABASE_HOST
     - CARABASE_WORKSPACE_ID
@@ -10,7 +10,11 @@ metadata:
 
 # Carabase Core
 
-You are connected to a Carabase personal knowledge system. This skill handles connection setup, health verification, and provides the foundation that the other Carabase skills build on.
+You are connected to a **Carabase** personal knowledge system — a self-hosted, privacy-first workspace with daily notes, folios (project knowledge collections), a knowledge graph, artifacts, memories, and task management. Everything runs on the user's own hardware over a Tailscale mesh network.
+
+This skill handles connection setup, health verification, and serves as the index to all Carabase capabilities.
+
+---
 
 ## Connection Configuration
 
@@ -24,9 +28,11 @@ Every REST API request to Carabase MUST include:
 x-workspace-id: <CARABASE_WORKSPACE_ID>
 ```
 
+---
+
 ## Health Check
 
-To verify the connection is working, make a GET request:
+Verify the connection is working:
 
 ```
 GET {CARABASE_HOST}/api/v1/health
@@ -35,17 +41,20 @@ Headers:
 ```
 
 A healthy response returns HTTP 200. If this fails:
-1. Confirm `CARABASE_HOST` is reachable (try curl or fetch to the base URL)
-2. Confirm `CARABASE_WORKSPACE_ID` is a valid UUID for an existing workspace
-3. Check that the Carabase server is running
+1. Confirm `CARABASE_HOST` is reachable (try curl or fetch to the base URL).
+2. Confirm `CARABASE_WORKSPACE_ID` is a valid UUID for an existing workspace.
+3. Check that the Carabase server process is running on the host machine.
+4. If connecting over Tailscale, confirm both machines are on the same tailnet and the host's IP/MagicDNS name is correct.
 
-## MCP Server Connection
+---
 
-Carabase exposes an MCP server for richer tool-based interactions. To connect via MCP:
+## MCP Server Connection (Primary Interface)
+
+Carabase exposes an MCP (Model Context Protocol) server. **MCP tools are the preferred interface** for all agent interactions — they handle workspace scoping automatically, provide simpler parameter passing, and integrate natively with tool-calling flows.
 
 - **Transport**: SSE (Server-Sent Events)
 - **Endpoint**: `GET {CARABASE_HOST}/mcp/sse`
-- The MCP server is workspace-scoped — the workspace ID is baked in at server creation.
+- The MCP server is workspace-scoped — the workspace ID is baked in at server creation; no `x-workspace-id` header is needed for MCP calls.
 
 ### MCP Setup for OpenClaw
 
@@ -62,36 +71,63 @@ Add the Carabase MCP server to your agent's MCP configuration:
 }
 ```
 
-Once connected, the following MCP tools become available:
-- `commit_to_folio` — Add content to a folio
-- `search_semantic` — Vector search across all artifacts
-- `query_graph` — Knowledge graph lookup
-- `read_artifact` — Read uploaded file content
-- `create_log_entry` — Write to the daily timeline
-- `read_folio_map` — Get folio overview (About + Timeline)
-- `update_folio_section` — Patch folio sections
+---
 
-## Related Skills
+## Complete MCP Tool Inventory (15 tools)
 
-Use these companion skills for specific operations:
+### Task Management (P0)
 
-- **carabase-tasks** — Create, list, filter, and toggle tasks
-- **carabase-knowledge** — Search content, query the knowledge graph, manage folios and artifacts
-- **carabase-daily** — Read and write daily notes, create log entries
+| Tool | Purpose | Skill Reference |
+|---|---|---|
+| `create_task` | Create a task in a daily note with optional folio/tag context | carabase-tasks |
+| `list_tasks` | List and filter tasks across daily notes by status, folio, tag, date range | carabase-tasks |
+| `toggle_task` | Check or uncheck a task by its composite ID | carabase-tasks |
 
-## REST API Conventions
+### Daily Notes (P1)
 
-All Carabase REST endpoints follow these patterns:
+| Tool | Purpose | Skill Reference |
+|---|---|---|
+| `create_log_entry` | Write a timestamped entry to today's daily note | carabase-daily |
+| `read_daily_note` | Read a daily note as human-readable markdown | carabase-daily |
 
-- Base path: `{CARABASE_HOST}/api/v1/`
-- Content-Type: `application/json` for POST/PATCH bodies
-- Date format: `YYYY-MM-DD` (e.g., `2026-03-30`)
-- All requests require the `x-workspace-id` header
-- Document content uses TipTap/ProseMirror JSON block format
+### Knowledge & Search
 
-## Standard Request Template
+| Tool | Purpose | Skill Reference |
+|---|---|---|
+| `search_semantic` | Vector similarity search across all content | carabase-knowledge |
+| `query_graph` | Look up an entity and its relationships in the knowledge graph | carabase-knowledge |
+| `list_entities` | Browse and filter knowledge graph entities | carabase-knowledge |
 
-When making any Carabase REST call, use this pattern:
+### Folio Management
+
+| Tool | Purpose | Skill Reference |
+|---|---|---|
+| `list_folios` | Browse available folios in the workspace | carabase-knowledge |
+| `read_folio_map` | Get a folio's About section and Timeline overview | carabase-knowledge |
+| `commit_to_folio` | Append a commit entry to a folio's timeline | carabase-knowledge |
+| `update_folio_section` | Modify a specific section of a folio (e.g., About text) | carabase-knowledge |
+
+### Artifacts & Memories
+
+| Tool | Purpose | Skill Reference |
+|---|---|---|
+| `read_artifact` | Read the extracted text of an uploaded file | carabase-knowledge |
+| `search_memories` | Search distilled memories via vector similarity | carabase-knowledge |
+| `create_memory` | Store a distilled insight or decision as a memory | carabase-knowledge |
+
+---
+
+## REST API (Fallback Interface)
+
+When MCP tools do not cover a use case (e.g., uploading artifacts, creating folios, fine-grained document manipulation), fall back to the REST API.
+
+### Base URL
+
+```
+{CARABASE_HOST}/api/v1/
+```
+
+### Standard Request Pattern
 
 ```bash
 curl -X {METHOD} "{CARABASE_HOST}/api/v1/{endpoint}" \
@@ -100,15 +136,66 @@ curl -X {METHOD} "{CARABASE_HOST}/api/v1/{endpoint}" \
   -d '{body}'
 ```
 
-Or with fetch:
+### Key REST Endpoints
 
-```javascript
-const response = await fetch(`${CARABASE_HOST}/api/v1/${endpoint}`, {
-  method: '{METHOD}',
-  headers: {
-    'Content-Type': 'application/json',
-    'x-workspace-id': CARABASE_WORKSPACE_ID
-  },
-  body: JSON.stringify(payload)
-});
-```
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/tasks` | List all tasks |
+| POST | `/api/v1/tasks` | Create a task |
+| PATCH | `/api/v1/tasks` | Toggle a task's checked state |
+| GET | `/api/v1/daily-notes/:date` | Get daily note (auto-creates if absent) |
+| GET | `/api/v1/daily-notes/:date/text` | Get daily note as rendered text |
+| PATCH | `/api/v1/daily-notes/:date` | Update daily note document |
+| POST | `/api/v1/daily-notes/inject` | Inject a block into today's daily note |
+| GET | `/api/v1/folios` | List all folios |
+| POST | `/api/v1/folios` | Create a folio |
+| GET | `/api/v1/folios/:folioId` | Get folio detail |
+| PATCH | `/api/v1/folios/:folioId` | Update a folio |
+| GET | `/api/v1/entities` | List knowledge graph entities |
+| GET | `/api/v1/entities/:entityId` | Get entity with edges |
+| GET | `/api/v1/edges` | List all graph edges |
+| GET | `/api/v1/memories` | List memories |
+| POST | `/api/v1/memories` | Create a memory |
+| GET | `/api/v1/artifacts/:id` | Get artifact metadata |
+| GET | `/api/v1/artifacts/:id/content` | Get artifact extracted text |
+| POST | `/api/v1/artifacts/upload` | Upload an artifact (multipart/form-data) |
+
+### Conventions
+
+- **Content-Type**: `application/json` for POST/PATCH bodies
+- **Date format**: `YYYY-MM-DD` (e.g., `2026-03-30`)
+- **All requests** require the `x-workspace-id` header
+- **Document content** uses TipTap/ProseMirror JSON block format
+
+---
+
+## Related Skills
+
+Use these companion skills for specific workflows:
+
+- **carabase-tasks** — Create, list, filter, and toggle tasks. Covers MCP tools `create_task`, `list_tasks`, `toggle_task` and REST fallback patterns.
+- **carabase-daily** — Read and write daily notes, create log entries, inject content blocks. Covers MCP tools `read_daily_note`, `create_log_entry` and REST patterns for document manipulation.
+- **carabase-knowledge** — Search content, query the knowledge graph, manage folios, read artifacts, and work with memories. Covers MCP tools `search_semantic`, `query_graph`, `list_entities`, `list_folios`, `read_folio_map`, `commit_to_folio`, `update_folio_section`, `read_artifact`, `search_memories`, `create_memory`.
+
+---
+
+## Quick Decision Guide
+
+| User wants to... | Use this tool | Skill |
+|---|---|---|
+| Create a task / todo | `create_task` | carabase-tasks |
+| See open tasks | `list_tasks` | carabase-tasks |
+| Mark a task done | `toggle_task` | carabase-tasks |
+| Read today's notes | `read_daily_note` | carabase-daily |
+| Log something to the timeline | `create_log_entry` | carabase-daily |
+| Find information across everything | `search_semantic` | carabase-knowledge |
+| Understand entity relationships | `query_graph` | carabase-knowledge |
+| Browse entities | `list_entities` | carabase-knowledge |
+| Browse projects/folios | `list_folios` | carabase-knowledge |
+| Get project context | `read_folio_map` | carabase-knowledge |
+| Record a project update | `commit_to_folio` | carabase-knowledge |
+| Update project description | `update_folio_section` | carabase-knowledge |
+| Read an uploaded document | `read_artifact` | carabase-knowledge |
+| Search past decisions/insights | `search_memories` | carabase-knowledge |
+| Store an important insight | `create_memory` | carabase-knowledge |
