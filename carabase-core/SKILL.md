@@ -2,7 +2,7 @@
 name: carabase-core
 description: Set up and verify connection to a Carabase instance. Health checks, MCP server configuration, complete tool inventory, and references to task, knowledge, and daily note skills.
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
   requires_env:
     - CARABASE_HOST
     - CARABASE_WORKSPACE_ID
@@ -71,9 +71,26 @@ Add the Carabase MCP server to your agent's MCP configuration:
 }
 ```
 
+> Tools follow the canonical `carabase_*` naming. Legacy `search_semantic` / `query_graph` are still registered as deprecated aliases — see **carabase-knowledge** for the full surface (6 canonical retrieval tools, Doctor-RAG hint repair, FLARE hypothesis verification, lazy `carabase://artifact/{id}` resources).
+
 ---
 
-## Complete MCP Tool Inventory (15 tools)
+## Complete MCP Tool Inventory
+
+The host exposes **6 canonical retrieval tools** plus the task / daily-note / folio / artifact / memory tools below. Legacy `search_semantic` and `query_graph` remain as deprecated aliases.
+
+### Canonical Retrieval (P0)
+
+| Tool | Purpose | Skill Reference |
+|---|---|---|
+| `carabase_search_semantic` | Vector similarity search across all content. Returns lazy `carabase://artifact/{id}` URIs. | carabase-knowledge |
+| `carabase_search_graph` | Look up an entity and walk its relationships (depth 1–3). | carabase-knowledge |
+| `carabase_find_entity_candidates` | Multi-strategy entity-name resolver (exact / alias / substring). | carabase-knowledge |
+| `carabase_query_metadata` | Filter by tag, date range, source, or entity. | carabase-knowledge |
+| `carabase_route_and_execute` | Hand a natural-language query to the router; it picks the strategies. | carabase-knowledge |
+| `carabase_verify_hypothesis` | FLARE-style claim verification. Returns `corroborated` / `contradicted` / `mixed` / `inconclusive`. | carabase-knowledge |
+
+All canonical tools append `[hint: …]` / `[trace: …]` trailers to empty-state and error responses — **read them and act on them** (Doctor-RAG hint repair). See carabase-knowledge for details.
 
 ### Task Management (P0)
 
@@ -90,13 +107,13 @@ Add the Carabase MCP server to your agent's MCP configuration:
 | `create_log_entry` | Write a timestamped entry to today's daily note | carabase-daily |
 | `read_daily_note` | Read a daily note as human-readable markdown | carabase-daily |
 
-### Knowledge & Search
+### Knowledge Browsing
 
 | Tool | Purpose | Skill Reference |
 |---|---|---|
-| `search_semantic` | Vector similarity search across all content | carabase-knowledge |
-| `query_graph` | Look up an entity and its relationships in the knowledge graph | carabase-knowledge |
 | `list_entities` | Browse and filter knowledge graph entities | carabase-knowledge |
+
+> For search, use the canonical retrieval tools above, not the deprecated `search_semantic` / `query_graph` aliases.
 
 ### Folio Management
 
@@ -176,7 +193,7 @@ Use these companion skills for specific workflows:
 
 - **carabase-tasks** — Create, list, filter, and toggle tasks. Covers MCP tools `create_task`, `list_tasks`, `toggle_task` and REST fallback patterns.
 - **carabase-daily** — Read and write daily notes, create log entries, inject content blocks. Covers MCP tools `read_daily_note`, `create_log_entry` and REST patterns for document manipulation.
-- **carabase-knowledge** — Search content, query the knowledge graph, manage folios, read artifacts, and work with memories. Covers MCP tools `search_semantic`, `query_graph`, `list_entities`, `list_folios`, `read_folio_map`, `commit_to_folio`, `update_folio_section`, `read_artifact`, `search_memories`, `create_memory`.
+- **carabase-knowledge** — The 6 canonical retrieval tools (`carabase_search_semantic`, `carabase_search_graph`, `carabase_find_entity_candidates`, `carabase_query_metadata`, `carabase_route_and_execute`, `carabase_verify_hypothesis`), Doctor-RAG hint repair, lazy `carabase://artifact/{id}` resources, plus `list_entities`, `list_folios`, `read_folio_map`, `commit_to_folio`, `update_folio_section`, `read_artifact`, `search_memories`, `create_memory`.
 
 ---
 
@@ -189,8 +206,12 @@ Use these companion skills for specific workflows:
 | Mark a task done | `toggle_task` | carabase-tasks |
 | Read today's notes | `read_daily_note` | carabase-daily |
 | Log something to the timeline | `create_log_entry` | carabase-daily |
-| Find information across everything | `search_semantic` | carabase-knowledge |
-| Understand entity relationships | `query_graph` | carabase-knowledge |
+| Find information across everything | `carabase_search_semantic` | carabase-knowledge |
+| Let the router decide how to search | `carabase_route_and_execute` | carabase-knowledge |
+| Resolve an ambiguous entity name | `carabase_find_entity_candidates` | carabase-knowledge |
+| Understand entity relationships | `carabase_search_graph` | carabase-knowledge |
+| Filter by tag / date / source | `carabase_query_metadata` | carabase-knowledge |
+| Verify a fact before stating it | `carabase_verify_hypothesis` | carabase-knowledge |
 | Browse entities | `list_entities` | carabase-knowledge |
 | Browse projects/folios | `list_folios` | carabase-knowledge |
 | Get project context | `read_folio_map` | carabase-knowledge |

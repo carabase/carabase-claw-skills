@@ -10,7 +10,7 @@ OpenClaw AgentSkill templates for interacting with a [Carabase](https://github.c
 |---|---|
 | **carabase-core** | Connection setup, health check, MCP config |
 | **carabase-tasks** | Create, list, filter, and toggle tasks |
-| **carabase-knowledge** | Semantic search, knowledge graph queries, folio management, artifact reading |
+| **carabase-knowledge** | 6 canonical retrieval tools (semantic, graph, metadata, entity-resolution, router, hypothesis verification) + Doctor-RAG hint repair + lazy artifact resources + folio/artifact/memory management |
 | **carabase-daily** | Read and write daily notes, create log entries |
 
 ## Installation
@@ -43,6 +43,13 @@ Set these environment variables (or configure in your OpenClaw workspace setting
 | `CARABASE_WORKSPACE_ID` | Yes | UUID of the workspace to operate on |
 
 All REST API calls require the `x-workspace-id` header, which the skills populate from `CARABASE_WORKSPACE_ID`.
+
+## Compatibility
+
+| Skill version | Requires `carabase-host` |
+|---|---|
+| 2.1.x | ≥ Phase 15 (PR #64) — canonical `carabase_*` tool surface, Doctor-RAG hints, FLARE verification |
+| 2.0.x | Phase 10 or earlier — legacy `search_semantic` / `query_graph` only |
 
 ## Usage Examples
 
