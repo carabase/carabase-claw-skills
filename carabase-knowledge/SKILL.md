@@ -1,8 +1,8 @@
 ---
 name: carabase-knowledge
-description: Search content semantically, query the knowledge graph, browse and manage folios, read artifacts, and work with memories in Carabase.
+description: Search content semantically, route natural-language queries, query the knowledge graph, resolve entity names, filter by metadata, verify hypotheses, and manage folios, artifacts, and memories in Carabase.
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
   requires_env:
     - CARABASE_HOST
     - CARABASE_WORKSPACE_ID
@@ -12,203 +12,219 @@ metadata:
 
 # Carabase Knowledge
 
-Search, explore, and manage knowledge in a Carabase workspace. This skill covers semantic search, the knowledge graph, folios (project knowledge collections), artifacts (uploaded files), and memories (distilled insights).
+Search, explore, and manage knowledge in a Carabase workspace. This skill covers the six canonical retrieval tools (semantic, graph, metadata, entity-resolution, router, hypothesis verification), Doctor-RAG hint repair, lazy artifact resources, folios, artifacts, and memories.
 
-**Primary interface**: MCP tools
+**Primary interface**: MCP tools (canonical `carabase_*` surface)
 **Fallback**: REST API at `{CARABASE_HOST}/api/v1/`
 
----
-
-## Semantic Search
-
-### search_semantic (MCP)
-
-Vector similarity search across all content — daily notes, folio text, and artifact extracted text. This is the broadest search tool and the best starting point when you do not know where information lives.
-
-```
-Tool: search_semantic
-Arguments:
-  query: "OAuth authentication flow"        (required — natural language search query)
-```
-
-**Returns**: Ranked list of matching content excerpts with source references (daily note date, folio name, artifact ID).
-
-**Examples**:
-
-Find implementation details:
-```json
-{
-  "query": "Redis caching layer implementation"
-}
-```
-
-Find decisions about a topic:
-```json
-{
-  "query": "why we chose PostgreSQL over ClickHouse"
-}
-```
-
-Find mentions of a person or project:
-```json
-{
-  "query": "Alice's work on the auth service"
-}
-```
-
-**REST fallback**: There is no direct REST search endpoint. When MCP is unavailable, approximate search by:
-1. Listing folios and scanning their About/Timeline text
-2. Reading artifacts and searching their extracted text
-3. Querying the knowledge graph for entity matches
+> **Compatibility**: requires `carabase-host` ≥ Phase 15 (PR #64). Earlier hosts only expose the legacy `search_semantic` / `query_graph` aliases.
 
 ---
 
-## Knowledge Graph
+## Canonical Retrieval Tools
 
-Carabase maintains a graph of entities (people, projects, concepts, organizations, tools, topics) connected by typed edges (relationships). The graph is automatically enriched as entities are mentioned in daily notes.
+The host exposes **six** first-class `carabase_*` retrieval tools. Prefer these over composing REST calls. Legacy `search_semantic` and `query_graph` still work as deprecated aliases — use the canonical names.
 
-### query_graph (MCP)
+### carabase_search_semantic (MCP)
 
-Look up an entity in the knowledge graph and return its relationships. Includes the entity's type, metadata, and a summary.
+Vector similarity search across all content — daily notes, folio text, and artifact extracted text. The broadest search tool and the best starting point when you do not know where information lives.
 
 ```
-Tool: query_graph
+Tool: carabase_search_semantic
 Arguments:
-  entity: "Acme Project"                    (required — entity name to look up)
+  query: "OAuth authentication flow"   (required — natural-language query)
+  limit: 5                              (optional — max results)
 ```
 
-**Returns**: The entity with its type, metadata (including readme summary), and all connected edges.
+**Returns**: Ranked list of hits. Each hit includes a `carabase://artifact/<id>` resource URI for the source body. **Bodies are not inlined** — fetch them on demand via `resources/read` (see [Lazy Artifact Resources](#lazy-artifact-resources)).
 
 **Examples**:
 
-Look up a project:
 ```json
-{
-  "entity": "Acme Project"
-}
+{ "query": "Redis caching layer implementation" }
 ```
 
-Look up a person:
 ```json
-{
-  "entity": "Alice Chen"
-}
+{ "query": "why we chose PostgreSQL over ClickHouse" }
 ```
 
-Look up a concept:
 ```json
-{
-  "entity": "OAuth 2.0"
-}
+{ "query": "Alice's work on the auth service", "limit": 10 }
 ```
-
-**Response includes**:
-- Entity name, type, and metadata
-- `readme_summary` — first 500 characters of the entity's description
-- All edges with relationship types and connected entity names
 
 ---
 
-### list_entities (MCP)
+### carabase_search_graph (MCP)
 
-Browse knowledge graph entities with optional type and name filters. Useful for discovery when you do not know exact entity names.
+Look up an entity in the knowledge graph and walk its relationships to a configurable depth.
 
 ```
-Tool: list_entities
+Tool: carabase_search_graph
 Arguments:
-  type: "project"                           (optional — filter by entity type)
-  query: "backend"                          (optional — search filter on entity name)
-  limit: 20                                 (optional — max results, default 20)
+  entity: "Acme Project"   (required — entity name)
+  depth: 1                  (optional — 1–3, default 1)
 ```
 
-**Entity types**: `person`, `project`, `concept`, `organization`, `tool`, `topic`
-
-**Returns**: Entity list with name, type, and connection count (number of edges).
+**Returns**: The entity with its type, metadata, and edges out to `depth` hops. If the entity is not found, the response includes candidate names so you can re-query.
 
 **Examples**:
 
-List all projects:
+```json
+{ "entity": "Acme Project" }
+```
+
+Walk two hops out from a person to discover their project ecosystem:
+```json
+{ "entity": "Alice Chen", "depth": 2 }
+```
+
+---
+
+### carabase_find_entity_candidates (MCP)
+
+Multi-strategy entity-name resolver (exact match → alias → substring). Use this **first** whenever the user gives an ambiguous or partial name — it is cheaper than guessing wrong on `carabase_search_graph`.
+
+```
+Tool: carabase_find_entity_candidates
+Arguments:
+  name: "alice"   (required — partial or ambiguous name)
+  limit: 5         (optional)
+```
+
+**Returns**: Ranked candidate entities with name, type, and match strategy.
+
+**Example**:
+```json
+{ "name": "auth" }
+```
+
+---
+
+### carabase_query_metadata (MCP)
+
+Filtered metadata search — pull content by tag, date range, source, or associated entity. Use this when the user's intent is structural ("things tagged X", "notes from last week") rather than semantic.
+
+```
+Tool: carabase_query_metadata
+Arguments:
+  tags: ["deploy", "production"]      (optional)
+  date_after: "2026-03-01"            (optional, YYYY-MM-DD)
+  date_before: "2026-04-01"           (optional)
+  source: "daily-note"                (optional)
+  entity_name: "Acme Project"         (optional)
+  limit: 20                            (optional)
+```
+
+**Examples**:
+
+Recent deploy notes:
+```json
+{ "tags": ["deploy"], "date_after": "2026-03-15" }
+```
+
+Everything tied to a project this quarter:
+```json
+{ "entity_name": "Acme Project", "date_after": "2026-01-01" }
+```
+
+---
+
+### carabase_route_and_execute (MCP)
+
+The lazy escape hatch. When you don't want to compose tools yourself, hand the user's natural-language query to the router and let it classify and fan out to the right strategies.
+
+```
+Tool: carabase_route_and_execute
+Arguments:
+  query: "what did we decide about ClickHouse last quarter?"
+  concept_root_ids: ["..."]   (optional — anchor concept ids)
+```
+
+**Returns**: A composed answer set with results from whichever strategies the router picked. Treat this as the high-recall "I don't know where to look" path.
+
+---
+
+### carabase_verify_hypothesis (MCP)
+
+FLARE-style claim verification. Pass a factual claim and the host runs a corroboration sweep, returning a verdict.
+
+```
+Tool: carabase_verify_hypothesis
+Arguments:
+  claim: "We chose PostgreSQL over ClickHouse for analytics"
+  limit: 10   (optional)
+```
+
+**Returns**:
 ```json
 {
-  "type": "project"
+  "verdict": "corroborated" | "contradicted" | "mixed" | "inconclusive",
+  "corroborated_by": [ ... ],
+  "contradicted_by": [ ... ],
+  "considered": 12
 }
 ```
 
-Search for entities matching a term:
+**When to use**: before stating a fact you're not 100% sure about, especially when the user is acting on your answer. Branch on `verdict`:
+
+- `corroborated` → state the fact, cite `corroborated_by`.
+- `contradicted` → do **not** state the fact; surface the contradicting evidence.
+- `mixed` → present both sides, ask the user.
+- `inconclusive` → say you can't verify and offer to search differently.
+
+**Example**:
 ```json
-{
-  "query": "auth"
-}
+{ "claim": "Friday deploys were frozen starting April 2026" }
 ```
 
-List people:
-```json
-{
-  "type": "person",
-  "limit": 50
-}
+---
+
+## Doctor-RAG Hint Repair
+
+When a canonical tool returns an empty result or an error, the host appends structured trailers to the response:
+
+```
+No results found for "Sam Rivera".
+[hint: Semantic search hit zero. Try (1) dropping adjectives and re-querying, (2) calling `carabase_route_and_execute` with the same query, (3) `carabase_find_entity_candidates` if "Sam Rivera" is meant as a person name.]
+[trace: searched semantic for "Sam Rivera" → 0 hits]
 ```
 
-### REST Fallback for Graph
+**Rules for the agent**:
 
-**List entities:**
-```
-GET {CARABASE_HOST}/api/v1/entities
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-```
+1. **Always read the trailer.** Do not strip `[hint: …]` / `[trace: …]` lines from tool output before reasoning over it.
+2. **Act on the hint** instead of replanning from scratch. The host has already diagnosed why you got nothing — follow the suggested next call.
+3. **Surface trailers verbatim** if you're explaining your reasoning to the user.
 
-**Get entity detail with edges:**
-```
-GET {CARABASE_HOST}/api/v1/entities/{entityId}
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-```
+**Hint shapes you'll see**:
 
-Response:
-```json
-{
-  "entity": {
-    "id": "entity-uuid",
-    "name": "Acme Project",
-    "type": "project",
-    "metadata": {},
-    "edges": [
-      {
-        "id": "edge-uuid",
-        "sourceId": "entity-uuid",
-        "targetId": "other-entity-uuid",
-        "type": "involves",
-        "targetName": "Alice Chen"
-      }
-    ]
-  }
-}
+| Shape | When | Typical fix |
+|---|---|---|
+| `semanticNoResults` | `carabase_search_semantic` returns 0 | Drop adjectives, retry, or fall back to `carabase_route_and_execute`. |
+| `metadataNoResults` | `carabase_query_metadata` returns 0 | Loosen filters; widen the date window; drop a tag. |
+| `graphUnknownEntity` | `carabase_search_graph` can't find the entity | Call `carabase_find_entity_candidates` with the same name. |
+| `candidatesNoResults` | `carabase_find_entity_candidates` returns 0 | Try a substring or alias; fall back to semantic. |
+| `generic` | Any other empty/error state | Read the trace and pick a different strategy. |
+
+---
+
+## Lazy Artifact Resources
+
+Tool results from the canonical retrieval tools return resource URIs of the form:
+
+```
+carabase://artifact/{id}
 ```
 
-**List all edges:**
+Bodies are **not** inlined into the tool result — this keeps the agent's context lean. To read the body:
+
 ```
-GET {CARABASE_HOST}/api/v1/edges
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
+resources/read("carabase://artifact/a1b2c3d4-...")
 ```
 
-### Graph Exploration Patterns
+**Notes**:
 
-**Find connections between two entities:**
-1. `query_graph(entity: "Entity A")` — get A's edges
-2. `query_graph(entity: "Entity B")` — get B's edges
-3. Look for shared target/source entities (common neighbors)
-
-**Map a project's people:**
-1. `query_graph(entity: "Project Name")`
-2. Filter edges to types: "involves", "owned_by", "contributed_by"
-3. Each connected entity is a person or team associated with the project
-
-**Discover the full graph landscape:**
-1. `list_entities()` — see all entities
-2. Group by type for an overview
-3. Drill into specific entities with `query_graph`
+- The host may return auto-compacted bodies when format-aware compaction is enabled (Phase 13). Compaction is mime-type-aware (csv, markdown, pdf, plain, code) and lossy by design — the original is still on disk if you need the REST endpoint.
+- Fetch artifacts only when you need to quote or reason over the body. For "did this exist" / "is it tagged X" questions the search-tool result is enough.
 
 ---
 
@@ -218,29 +234,15 @@ Folios are named knowledge collections — like project folders. Each has an Abo
 
 ### list_folios (MCP)
 
-Browse available folios in the workspace. Helps discover context before using `read_folio_map` or `commit_to_folio`.
+Browse available folios in the workspace.
 
 ```
 Tool: list_folios
 Arguments:
-  query: "backend"                          (optional — search filter on folio name)
+  query: "backend"   (optional)
 ```
 
 **Returns**: Folio list with name, created/updated dates, and commit count.
-
-**Examples**:
-
-List all folios:
-```json
-{}
-```
-
-Search for folios:
-```json
-{
-  "query": "API"
-}
-```
 
 ---
 
@@ -251,47 +253,20 @@ Get a folio's About section and Timeline overview. Use this to understand a proj
 ```
 Tool: read_folio_map
 Arguments:
-  folio_name: "Backend"                     (required — name of the folio)
-```
-
-**Returns**: The folio's About text and a summary of its Timeline entries.
-
-**Example**:
-```json
-{
-  "folio_name": "Backend"
-}
+  folio_name: "Backend"   (required)
 ```
 
 ---
 
 ### commit_to_folio (MCP)
 
-Append a commit entry to a folio's timeline. Use this to record significant updates, decisions, or deliverables.
+Append a commit entry to a folio's timeline.
 
 ```
 Tool: commit_to_folio
 Arguments:
-  folio_name: "Backend"                     (required — target folio name)
-  content: "Implemented Redis caching..."   (required — the content to commit)
-```
-
-**Examples**:
-
-Record a deliverable:
-```json
-{
-  "folio_name": "Backend",
-  "content": "Implemented Redis caching layer for session management. Reduced p95 latency by 40%."
-}
-```
-
-Record a decision:
-```json
-{
-  "folio_name": "Planning",
-  "content": "Decided to use PostgreSQL for analytics pipeline instead of ClickHouse. Rationale: operational simplicity, team familiarity, and sufficient performance for current scale."
-}
+  folio_name: "Backend"
+  content: "Implemented Redis caching layer..."
 ```
 
 ---
@@ -303,238 +278,110 @@ Modify a specific section of a folio. Currently supports updating the About sect
 ```
 Tool: update_folio_section
 Arguments:
-  folio_name: "Backend"                     (required — target folio name)
-  action: "update_about"                    (required — the update action)
-  content: "New about text..."              (required — the new content)
+  folio_name: "Backend"
+  action: "update_about"
+  content: "New about text..."
 ```
-
-**Available actions:**
 
 | Action | Description |
 |---|---|
 | `update_about` | Replace the folio's About section text |
 
-**Example**:
-```json
-{
-  "folio_name": "Backend",
-  "action": "update_about",
-  "content": "Backend services powering the core API. Built with Node.js, Fastify, and PostgreSQL. Now includes Redis caching layer."
-}
-```
-
 ### REST Fallback for Folios
 
-**List folios:**
 ```
-GET {CARABASE_HOST}/api/v1/folios
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-```
-
-**Create a folio:**
-```
-POST {CARABASE_HOST}/api/v1/folios
-Headers:
-  Content-Type: application/json
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-Body:
-{
-  "name": "New Project",
-  "about": "Description of the project"
-}
+GET    {CARABASE_HOST}/api/v1/folios
+POST   {CARABASE_HOST}/api/v1/folios
+GET    {CARABASE_HOST}/api/v1/folios/{folioId}
+PATCH  {CARABASE_HOST}/api/v1/folios/{folioId}
 ```
 
-**Get folio detail:**
-```
-GET {CARABASE_HOST}/api/v1/folios/{folioId}
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-```
-
-**Update a folio:**
-```
-PATCH {CARABASE_HOST}/api/v1/folios/{folioId}
-Headers:
-  Content-Type: application/json
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-Body:
-{
-  "name": "Updated Name",
-  "about": "Updated description"
-}
-```
+All require `x-workspace-id: {CARABASE_WORKSPACE_ID}`.
 
 ---
 
 ## Artifacts
 
-Artifacts are uploaded files (PDF, CSV, images, etc.) with extracted text content. The extraction pipeline processes uploaded files and stores searchable text.
+Artifacts are uploaded files (PDF, CSV, images, etc.) with extracted text content.
 
 ### read_artifact (MCP)
 
-Read the extracted text content of an uploaded file.
+Read the extracted text content of an uploaded file directly by id. (For artifacts surfaced through `carabase_search_semantic` results, prefer the lazy `carabase://artifact/{id}` resource read.)
 
 ```
 Tool: read_artifact
 Arguments:
-  artifact_id: "a1b2c3d4-..."              (required — UUID of the artifact)
-  max_tokens: 5000                          (optional — limits response size)
+  artifact_id: "a1b2c3d4-..."
+  max_tokens: 5000   (optional)
 ```
-
-**Returns**: Extracted text content of the artifact.
-
-**Examples**:
-
-Read full artifact text:
-```json
-{
-  "artifact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-}
-```
-
-Read with token limit (for large documents):
-```json
-{
-  "artifact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "max_tokens": 3000
-}
-```
-
-**Tip**: Use `max_tokens` for large files (PDFs, long CSVs) to avoid overwhelming your context window. Start with a smaller limit and request more if needed.
 
 ### REST Fallback for Artifacts
 
-**Get artifact metadata:**
 ```
-GET {CARABASE_HOST}/api/v1/artifacts/{id}
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-```
-
-Response:
-```json
-{
-  "artifact": {
-    "id": "uuid",
-    "filename": "report.pdf",
-    "mimeType": "application/pdf",
-    "size": 245000,
-    "createdAt": "2026-03-30T10:00:00Z"
-  }
-}
-```
-
-**Get extracted text:**
-```
-GET {CARABASE_HOST}/api/v1/artifacts/{id}/content
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-```
-
-**Upload an artifact:**
-```
-POST {CARABASE_HOST}/api/v1/artifacts/upload
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-Content-Type: multipart/form-data
-Body: file field with the uploaded file
+GET   {CARABASE_HOST}/api/v1/artifacts/{id}
+GET   {CARABASE_HOST}/api/v1/artifacts/{id}/content
+POST  {CARABASE_HOST}/api/v1/artifacts/upload   (multipart/form-data)
 ```
 
 ---
 
 ## Memories
 
-Memories are distilled insights extracted from daily notes over time or created explicitly. They capture important decisions, conclusions, patterns, and learnings that should persist beyond the daily note where they originated.
+Memories are distilled insights — important decisions, conclusions, patterns, and learnings.
 
 ### search_memories (MCP)
 
-Search distilled memories via vector similarity. Separate from `search_semantic` — this searches only the memories collection, not all content.
+Search distilled memories via vector similarity. Scoped to the memories collection only — use `carabase_search_semantic` for cross-source search.
 
 ```
 Tool: search_memories
 Arguments:
-  query: "database decision"                (required — search query)
-  limit: 5                                  (optional — max results, default 5)
-```
-
-**Returns**: Ranked list of matching memories with content and creation date.
-
-**Examples**:
-
-Search for past decisions:
-```json
-{
-  "query": "technology choices for analytics"
-}
-```
-
-Search for patterns:
-```json
-{
-  "query": "deployment process lessons learned"
-}
+  query: "database decision"
+  limit: 5   (optional)
 ```
 
 ---
 
 ### create_memory (MCP)
 
-Store a distilled insight or decision as a persistent memory. The memory is embedded for vector search and becomes findable via `search_memories`.
+Store a distilled insight or decision.
 
 ```
 Tool: create_memory
 Arguments:
-  content: "The team decided to use..."     (required — the memory text)
-  source: "daily-note:2026-03-30"           (optional — provenance reference)
-```
-
-**Returns**: Confirmation with the created memory ID.
-
-**Examples**:
-
-Store a decision:
-```json
-{
-  "content": "The team decided to use PostgreSQL for the new analytics pipeline instead of ClickHouse due to operational simplicity and team familiarity.",
-  "source": "daily-note:2026-03-30"
-}
-```
-
-Store a learned pattern:
-```json
-{
-  "content": "Deployments on Fridays have a 3x higher rollback rate. Team agreed to freeze Friday deploys starting April.",
-  "source": "daily-note:2026-03-28"
-}
-```
-
-Store an insight without a specific source:
-```json
-{
-  "content": "The auth service handles approximately 50k token validations per minute at peak. This is the current scaling bottleneck."
-}
+  content: "The team decided to use..."
+  source: "daily-note:2026-03-30"   (optional)
 ```
 
 ### REST Fallback for Memories
 
-**List memories:**
 ```
-GET {CARABASE_HOST}/api/v1/memories
-Headers:
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
+GET   {CARABASE_HOST}/api/v1/memories
+POST  {CARABASE_HOST}/api/v1/memories
 ```
 
-**Create a memory:**
+---
+
+## Entity Browsing (Legacy Helper)
+
+### list_entities (MCP)
+
+Browse knowledge graph entities by type or name. For ambiguous lookups prefer `carabase_find_entity_candidates`.
+
 ```
-POST {CARABASE_HOST}/api/v1/memories
-Headers:
-  Content-Type: application/json
-  x-workspace-id: {CARABASE_WORKSPACE_ID}
-Body:
-{
-  "content": "The memory text here."
-}
+Tool: list_entities
+Arguments:
+  type: "project"      (optional — person | project | concept | organization | tool | topic)
+  query: "backend"     (optional)
+  limit: 20            (optional)
+```
+
+### REST Fallback for Graph
+
+```
+GET  {CARABASE_HOST}/api/v1/entities
+GET  {CARABASE_HOST}/api/v1/entities/{entityId}
+GET  {CARABASE_HOST}/api/v1/edges
 ```
 
 ---
@@ -543,94 +390,67 @@ Body:
 
 ### "Find documents about X"
 
-1. Call `search_semantic(query: "X")` to find relevant content across all sources.
-2. Review results — note which folios, daily notes, and artifacts appear.
-3. For folio results: call `read_folio_map` on relevant folios for full context.
-4. For artifact results: call `read_artifact` on referenced documents.
-5. Present a synthesized answer with source references.
-
-Example flow:
-```
-User: "Find documents about our authentication architecture"
-
-Agent:
-  → search_semantic(query: "authentication architecture")
-  → Results reference Backend folio and artifact "auth-design-v2.pdf"
-  → read_folio_map(folio_name: "Backend")
-  → read_artifact(artifact_id: "a1b2...", max_tokens: 5000)
-  → "Found relevant content in 3 sources:
-     1. Backend folio — describes OAuth 2.0 flow with PKCE...
-     2. Auth Design v2 PDF — detailed architecture diagram and sequence flows...
-     3. Daily note from Mar 15 — meeting notes about token rotation strategy..."
-```
+1. `carabase_search_semantic(query: "X")`.
+2. Read the `[hint: …]` / `[trace: …]` trailers if results are empty — act on them.
+3. For each hit's `carabase://artifact/{id}` URI, decide whether to `resources/read` the body.
+4. Synthesize an answer with source references.
 
 ### "Who is connected to Y?"
 
-1. Call `query_graph(entity: "Y")` to get the entity and its edges.
-2. Parse edges to identify connected people, projects, and concepts.
-3. For deeper context, call `query_graph` on the connected entities.
-
-Example flow:
-```
-User: "Who is connected to the Acme Project?"
-
-Agent:
-  → query_graph(entity: "Acme Project")
-  → Returns edges: involves→Alice, involves→Bob, uses→PostgreSQL, blocked_by→Legal Review
-  → "The Acme Project involves Alice and Bob, uses PostgreSQL, and is currently blocked by Legal Review."
-```
+1. `carabase_find_entity_candidates(name: "Y")` if the name is ambiguous.
+2. `carabase_search_graph(entity: "<resolved>", depth: 2)`.
+3. Parse edges to identify connected people, projects, concepts.
 
 ### "What folios exist?"
 
-1. Call `list_folios()` to browse all folios.
-2. Present the list with names and activity indicators (commit count, last updated).
-3. If the user asks about a specific folio, call `read_folio_map` for details.
-
-Example flow:
-```
-User: "What projects are tracked in Carabase?"
-
-Agent:
-  → list_folios()
-  → "You have 6 folios:
-     - Backend (12 commits, last updated today)
-     - Frontend (8 commits, last updated Mar 28)
-     - Planning (5 commits, last updated Mar 27)
-     - DevOps (3 commits, last updated Mar 25)
-     - Design (2 commits, last updated Mar 20)
-     - Hiring (1 commit, last updated Mar 15)"
-```
+1. `list_folios()`.
+2. `read_folio_map(folio_name: …)` for any the user wants to drill into.
 
 ### Research a Topic
 
-1. `search_semantic` with the topic query
-2. Review top results — note which folios and artifacts appear
-3. `read_folio_map` on relevant folios for project context
-4. `query_graph` on key entities for relationship context
-5. `read_artifact` for any referenced documents
-6. `search_memories` for past decisions and insights related to the topic
-7. Synthesize findings
+1. `carabase_route_and_execute(query: "<topic>")` — let the router pick strategies.
+2. Or compose manually: `carabase_search_semantic` → `carabase_search_graph` → `search_memories`.
+3. Pull artifact bodies lazily as needed.
+4. Synthesize.
+
+### Verify a Fact Before Answering
+
+When you're about to state a load-bearing fact (a decision, a number, a deadline) and you're not 100% sure:
+
+1. `carabase_verify_hypothesis(claim: "<the fact, stated declaratively>")`.
+2. Branch on the verdict:
+   - `corroborated` → state the fact and cite `corroborated_by`.
+   - `contradicted` → retract; tell the user the evidence points the other way.
+   - `mixed` → present both sides; ask the user which interpretation matches their question.
+   - `inconclusive` → say you can't verify and offer a different search.
+
+Example:
+```
+User: "Did we end up freezing Friday deploys?"
+
+Agent:
+  → carabase_verify_hypothesis(claim: "Friday deploys are frozen at Carabase")
+  → verdict: "corroborated", corroborated_by: [memory:..., daily-note:2026-03-28]
+  → "Yes — that decision was made on Mar 28 and recorded as a memory.
+     Source: daily note from 2026-03-28."
+```
 
 ### Onboard to a Project
 
-1. `list_folios` — find the project folio
-2. `read_folio_map` — read its About and Timeline
-3. `query_graph` — look up the project entity and its connections
-4. `search_semantic` — find recent activity related to the project
-5. `search_memories` — find key decisions about the project
-6. Summarize the project: purpose, people involved, recent activity, key decisions
-
-### Knowledge Audit
-
-1. `list_entities` — list all entities, group by type
-2. `list_folios` — list all folios
-3. Cross-reference: identify entities without folio associations
-4. `search_memories` — check for orphaned insights
-5. Report gaps in the knowledge graph and suggest improvements
+1. `list_folios` → find the project folio.
+2. `read_folio_map` → read its About and Timeline.
+3. `carabase_find_entity_candidates(name: "<project>")` → resolve the entity.
+4. `carabase_search_graph(entity: …, depth: 2)` → people and dependencies.
+5. `carabase_query_metadata(entity_name: …, date_after: "<recent>")` → recent activity.
+6. `search_memories(query: "<project>")` → key decisions.
 
 ### Store a Key Decision
 
-1. When a significant decision is made during a conversation or extracted from notes:
-2. Call `create_memory` with a clear statement of the decision and rationale.
-3. Call `commit_to_folio` to record the decision against the relevant project.
-4. Both actions ensure the decision is discoverable via different search paths.
+1. `create_memory` with the decision and rationale.
+2. `commit_to_folio` to record it against the relevant project.
+
+---
+
+## Deprecated Aliases
+
+The host still registers `search_semantic` and `query_graph` as backwards-compatible aliases for `carabase_search_semantic` and `carabase_search_graph`. **Do not use them in new flows** — they will be removed in a future host release.
